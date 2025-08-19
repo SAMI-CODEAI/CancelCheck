@@ -1,0 +1,7 @@
+venv/
+mlruns/
+logs/
+MLOPS_PROJECT_1.egg-info/
+# notebook/random_forest.pkl
+# notebook/random_forest_model.pkl
+hidden-phalanx-464505-h0-8c0d7e910ed4.json
