@@ -63,8 +63,8 @@ pipeline{
                     script{
                         echo 'Deploy to Google Cloud Run.............'
                         sh '''
-                        //export PATH=$PATH:${GCLOUD_PATH}
-                        set PATH=%PATH%;D:\Softwares\google-cloud-sdk\bin
+                        export PATH=$PATH:${GCLOUD_PATH}
+                        
 
 
                         gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
