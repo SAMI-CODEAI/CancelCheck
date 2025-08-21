@@ -4,7 +4,7 @@ pipeline{
     environment {
         VENV_DIR = 'venv'
         GCP_PROJECT = "mlops-new-447207"
-        GCLOUD_PATH = "D:/Softwares/google-cloud-sdk/"
+        GCLOUD_PATH = "D:/Softwares/google-cloud-sdk/path.bash.inc"
     }
 
     stages{
