@@ -1,11 +1,11 @@
-docker run -d --name jenkins-dind ^pipeline{
+pipeline {
     agent any
 
     environment {
         VENV_DIR = 'venv'
         GCP_PROJECT = "hidden-phalanx-464505-h0"
-        GCLOUD_PATH = "D:/Softwares/google-cloud-sdk/bin"
-         // GCLOUD_PATH = "/var/jenkins_home/google-cloud-sdk/bin"
+    GCLOUD_PATH = "D:/Softwares/google-cloud-sdk/bin"
+        //  GCLOUD_PATH = "/var/jenkins_home/google-cloud-sdk/bin"
         
     }
 
