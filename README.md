@@ -1,4 +1,4 @@
-# 🏨 Hotel Booking Cancellation Predictor
+# 🏨 CancelCheck (Hotel Booking Cancellation Predictor)
 
 Predict whether a hotel reservation will be **cancelled** or **not** using a full MLOps pipeline:
 - Data from **Google Cloud Storage (GCS)**
