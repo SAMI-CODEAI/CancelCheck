@@ -1,10 +1,12 @@
-pipeline{
+docker run -d --name jenkins-dind ^pipeline{
     agent any
 
     environment {
         VENV_DIR = 'venv'
-        GCP_PROJECT = "mlops-new-447207"
-        GCLOUD_PATH = "D:/Softwares/google-cloud-sdk/bin"
+        GCP_PROJECT = "hidden-phalanx-464505-h0"
+        // GCLOUD_PATH = "D:\Softwares\google-cloud-sdk\bin"
+         GCLOUD_PATH = "/var/jenkins_home/google-cloud-sdk/bin"
+        
     }
 
     stages{
@@ -37,7 +39,7 @@ pipeline{
                     script{
                         echo 'Building and Pushing Docker Image to GCR.............'
                         sh '''
-                        export PATH=$PATH;${GCLOUD_PATH}
+                        export PATH=$PATH:${GCLOUD_PATH}
 
 
                         gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
@@ -64,7 +66,6 @@ pipeline{
                         echo 'Deploy to Google Cloud Run.............'
                         sh '''
                         export PATH=$PATH:${GCLOUD_PATH}
-                        
 
 
                         gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
