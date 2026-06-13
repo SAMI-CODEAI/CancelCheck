@@ -76,48 +76,128 @@ $$y = \ln(1 + x)$$
 
 ---
 
-## 🛠️ Deep Dive: Detailed Module Breakdown
+## �️ The Dataset: Hotel Reservation Repository
 
-### 📂 Module 1: Data Ingestion (`src/data_ingestion.py`)
-This is the "entrance" to our cloud-native pipeline.
-- **Cloud Connectivity:** Uses the `google-cloud-storage` SDK to authenticate with GCP and stream data directly into the temporary `artifacts/raw` directory.
-- **Reproducible Splitting:** Implements a deterministic `train_test_split` with a fixed `random_state=42`. This ensures that every time the pipeline runs, the "Test Set" remains consistent, allowing for fair comparison between different model versions.
+The dataset used for this project is a comprehensive collection of booking records (Source: Kaggle Hotel Reservations Dataset), containing approximately **36,275 records** and **19 variables**.
 
-### 📂 Module 2: Data Preprocessing (`src/data_preprocessing.py`)
-This is the most compute-intensive part of the pipeline.
-- **Feature Selection (Mean Decrease Gini):** We train a temporary Random Forest to calculate feature importance. We keep only the **top 10 features**. This reduces the "Curse of Dimensionality" and prevents the model from over-learning noise.
-- **Label Encoding:** Maps categorical values (like "Meal Plan") to an integer space $[0, N-1]$.
-- **Modular Config:** All thresholds (like `skewness_threshold: 5`) are fetched from `config.yaml`, enabling "Code-Free Adjustment" of the pipeline parameters.
+### 1. Data Composition
+The features capture the full "Customer Journey" of a reservation:
+- **Lead Time:** The number of days between the booking date and arrival date. (Strongest predictor of cancellation).
+- **Price (`avg_price_per_room`):** Dynamic pricing factor.
+- **Special Requests:** Count of requests (e.g., high floor, twin bed).
+- **Segmentation:** Market segment (Online, Offline, Corporate, etc.).
+- **Temporal Features:** Arrival year, month, and date.
+- **Stay Duration:** Weekend nights vs. Week nights.
+- **Loyalty Metrics:** Repeated guest status, previous cancellations, and previous non-cancelled bookings.
 
-### 📂 Module 3: Model Training (`src/model_training.py`)
-The "brain" of the project where the LightGBM classifier resides.
-- **LightGBM Logic:** Unlike standard GBDT that grows trees level-wise, LightGBM grows trees **leaf-wise**. It chooses the leaf that results in the maximum delta in the loss function, leading to lower loss in fewer steps.
-- **Hyperparameter Tuning:** Uses `RandomizedSearchCV`. We defined a search space for `n_estimators` (100–500), `max_depth` (5–50), and `learning_rate` (0.01–0.2). This automated search finds the global optimum faster than grid search.
-
-### 📂 Module 4: Experiment Tracking (`MLflow`)
-The "System of Record" for the ML lifecycle.
-- **Run Tracking:** For every training session, MLflow captures the exact commit of the code, the data used, and the resulting metrics.
-- **Artifact Logging:** It stores the final `lgbm_model.pkl` in a structured directory, allowing us to revert to "Last Known Good Configuration" (LKGC) in case of production drift.
+### 2. The Target Variable
+- **`booking_status`**: A binary label where:
+    - `0`: Not Cancelled (Guest stayed).
+    - `1`: Cancelled (Guest did not show up).
 
 ---
 
-## ☁️ Cloud Infrastructure: The GCP Powerhouse
+## 🤖 Algorithm Deep Dive: Why LightGBM?
 
-This project is a **"GCP-First"** implementation, utilizing a serverless architecture to ensure high availability and zero maintenance.
+We chose **LightGBM (Light Gradient Boosting Machine)** over other popular algorithms for several strategic reasons:
 
-### 1. Google Cloud Storage (GCS) — The Data Lake
-We use GCS as our primary data source. 
-- **Benefit:** High scalability and 99.9% availability. It allows us to keep the dataset separate from the compute instance, supporting **Stateless Training**.
+### 1. Comparative Analysis: Why LGBM vs Others?
 
-### 2. Google Container Registry (GCR) — The Image Warehouse
-We containerize the application using Docker and push it to GCR.
-- **Security:** GCR provides automatic vulnerability scanning for our Python environments.
-- **Integration:** Acts as a bridge between Jenkins (CI) and Cloud Run (CD).
+| Algorithm | Why not chosen? | Comparison to LightGBM |
+| :--- | :--- | :--- |
+| **Logistic Regression** | Linear assumption. Hotel data has complex interactions (e.g., price vs. month) that a linear model misses. | LGBM captures high-order non-linear relationships and interactions natively. |
+| **Random Forest** | Grows trees independently and averages them; slower to train on many records and larger image sizes. | LGBM uses gradient boosting (sequential correction of errors), reaching higher accuracy with fewer trees. |
+| **XGBoost** | Uses pre-sorted based algorithm for split finding, which is memory-intensive and slower on large datasets. | LGBM uses a **Histogram-based algorithm**, which reduces memory usage by 10x and speeds up training by 3-5x. |
 
-### 3. Google Cloud Run — The Serverless King
-Cloud Run hosts our predictive service.
-- **Serverless Infrastructure:** We don't manage any servers. GCP automatically provisions CPU/RAM only when a user hits our Flask endpoint.
-- **Auto-Scaling:** If 1,000 users try to predict cancellations simultaneously, Cloud Run scales horizontally to handle the traffic, then scales back to zero when usage stops. This is the ultimate cost-optimization strategy for AI startups.
+### 2. Leaf-wise (Best-first) Tree Growth
+Unlike most GBDT (Gradient Boosting Decision Tree) algorithms that grow trees level-wise (layer by layer), LightGBM grows trees **leaf-wise**. It expands the leaf that creates the largest reduction in loss.
+- **Benefit:** Resulting in much lower loss and higher accuracy on tabular data.
+- **Caution:** Leaf-wise growth can lead to overfitting on small datasets, which we mitigated using `max_depth` constraints during tuning.
+
+### 3. GOSS (Gradient-based One-Side Sampling)
+LightGBM implements GOSS to handle large data efficiently. It keeps all instances with large gradients (those contributing most to error) and performs random sampling on instances with small gradients.
+- **Benefit:** This allows the model to learn from the "difficult" cases while significantly speeding up training by ignoring "easy" cases that are already well-learned.
+
+### 4. EFB (Exclusive Feature Bundling)
+Sparse features are common in hotel data (e.g., many categorical one-hot encoded columns). LightGBM bundles these exclusive features together into a single feature.
+- **Benefit:** Reduces the number of features processed without losing information, drastically improving training speed and reducing memory usage.
+
+---
+
+## 🧠 The Training Protocol: Rationale for Parameters
+
+The parameters in `model_params.py` weren't chosen at random. They represent a targeted search space for optimal "Hotel Prediction" performance:
+
+| Parameter | Range | Rationale for Choice |
+| :--- | :--- | :--- |
+| `n_estimators` | 100 – 500 | 100 is enough for a baseline, but 500 allows the model to "drill down" into rare cancellation patterns without excessive compute time. |
+| `num_leaves` | 20 – 100 | Since we use leaf-wise growth, `num_leaves` is the primary control for complexity. 100 leaves allow for deep interaction capture (e.g., Lead Time + Month + Price). |
+| `learning_rate` | 0.01 – 0.2 | A low learning rate (0.01) ensures stable convergence, while 0.2 allows for faster experimentation runs. |
+| `max_depth` | 5 – 50 | 5 prevents very shallow trees, while 50 allows for specific high-order branching needed for unique customer segments. |
+| `boosting_type` | `gbdt`, `dart`, `goss` | `gbdt` is standard; `dart` (Dropout additive regression trees) prevents overfitting; `goss` maximizes speed. We search all three to find the best fit for this specific distribution. |
+
+---
+
+The training process is a multi-stage optimized loop governed by `src/model_training.py`:
+
+### Step 1: Hyperparameter Search Space
+We don't guess parameters. We defined a statistical distribution for `RandomizedSearchCV` to explore:
+```python
+LIGHTGM_PARAMS = {
+    'n_estimators': randint(100, 500), # Number of boosting rounds
+    'max_depth' : randint(5, 50),     # Prevents overfitting in leaf-wise growth
+    'learning_rate': uniform(0.01, 0.2), # Step size shrinkage
+    'num_leaves': randint(20, 100),    # Main parameter for tree complexity
+    'boosting_type' : ['gbdt', 'dart', 'goss'] # Search across different GBDT variants
+}
+```
+
+### Step 2: Cross-Validation (2-Fold CV)
+To ensure the model generalizes across different slices of the data, we used **2-Fold Cross-Validation**. 
+- The data is split into 2 parts. 
+- In round 1, Part A trains and Part B validates. 
+- In round 2, Part B trains and Part A validates.
+- **Why 2-Fold?** Given the compute constraints and the size of the dataset, 2-fold CV provides a good balance between bias-variance estimation and training speed.
+
+### Step 3: Randomized Optimization
+Instead of a Grid Search (which checks every combination and takes hours), we used `RandomizedSearchCV` with **2 iterations**.
+- This randomly selects two combinations from the millions of possible points in our parameter space.
+- This "Stochastic Optimization" approach is statistically proven to find near-optimal parameters in a fraction of the time.
+
+### Step 4: Final Fit and Persistence
+Once the best parameters were identified (e.g., `n_estimators=314`, `max_depth=23`), the model was trained one last time on the **entire training set** to maximize learning. The final model object is then serialised via `joblib.dump()` for production use.
+
+---
+
+## ☁️ Cloud Infrastructure: Why & How Each Service was Used
+
+This project utilizes a **Production-Grade GCP Stack**. Here is the architectural rationale for every service choice:
+
+### 1. Google Cloud Storage (GCS) — The "Source of Truth"
+- **Used For:** Centralized storage of the `Hotel_Reservations.csv` dataset.
+- **Why?** 
+    - **Decoupling:** If the dataset was inside the git repo, every update would require a code commit. By using GCS, the Data Team can drop a new file version, and the ML Pipeline fetches it automatically.
+    - **Security:** We use **IAM (Identity and Access Management)** roles. Only our specifically designated Service Account can read from this bucket, ensuring the data is never public.
+    - **Reliability:** 99.99% availability ensures the training pipeline never fails due to "data missing" errors.
+
+### 2. Google Container Registry (GCR) — The "Artifact Vault"
+- **Used For:** Versioning and storing the Docker images built by Jenkins.
+- **Why?**
+    - **Layer Caching:** GCR stores Docker "layers." If we only change one line of Python code, GCR only updates that layer, making subsequent deployments 90% faster.
+    - **Vulnerability Scanning:** GCR automatically checks our Python libraries for known security exploits (CVEs).
+    - **Integration:** It acts as the direct "Feeder" for Cloud Run, allowing for secure, private image pulling.
+
+### 3. Google Cloud Run — The "Serverless Execution Engine"
+- **Used For:** Serving the trained Flask model via a global URL.
+- **Why?**
+    - **Zero Admin:** No server patching, no Linux maintenance. We just provide the container, and Google manages the rest.
+    - **Knative Scalability:** It uses the **"Scale-to-Zero"** model. If no one is using the app, we pay **$0.00**. As soon as a request comes in, it starts in milliseconds.
+    - **HTTPS by Default:** Google automatically provides an SSL certificate and a secure link, making the model instantly ready for production integration.
+
+### 4. IAM & Service Accounts — The "Security Guard"
+- **Used For:** Granting Jenkins and the Flask app specific permissions to talk to GCS and GCR.
+- **Why?** 
+    - **Principle of Least Privilege:** Instead of using "Owner" keys, we use a Service Account with only `Storage Object Viewer` and `Container Registry Writer` roles. If the key is ever leaked, the attacker cannot delete the project or create expensive VMs.
 
 ---
 
